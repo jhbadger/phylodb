@@ -1,0 +1,134 @@
+#!/usr/bin/env ruby
+
+require 'mysql'
+require 'trollop'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+  banner File.basename($0)
+  opt :database, "protein database", :default=>"phylodb", :type=>:string
+  opt :host, "database host", :default=>"mysql-lan-pro", :type=>:string
+  opt :limit, "limit number of records for testing", :type=>:integer
+  opt :number, "phylodb version number", :type=>:string, :required=>true
+  opt :nuc, "nucleotide version"
+end
+
+db = Mysql.init
+db.options(Mysql::OPT_READ_TIMEOUT, 100000)
+db.options(Mysql::OPT_CONNECT_TIMEOUT, 100000)
+db.options(Mysql::OPT_WRITE_TIMEOUT, 100000)
+db.real_connect( opts.host, 'access', 'access', opts.database)
+
+def flag_string(flag_num)
+  flag_num = flag_num.to_i
+  if flag_num == 1 || flag_num == 2
+    "kegg"
+  elsif flag_num == 5
+    "chloro"
+  elsif flag_num == 6
+    "mito"
+  elsif flag_num == 7
+    "transcript"
+  else
+    "rest"
+  end
+end
+
+def make_header(seguid, names, anns, spHash, taxons, flags)
+  sps = []
+  taxons.uniq.each do |t|
+    sps.push(spHash[t])
+  end
+  header = seguid + " "
+  header += names.uniq.join("||") + " "
+  header += "\<\<" + anns.uniq.join("||") + "\>\> "
+  header += "{" + sps.join("||") + "} "
+  header += taxons.uniq.join("||") + " "
+  header += flags.uniq.join("||")
+  header.tr!("\t","")
+  header
+end
+
+if opts.nuc
+  outF = "phylodb_nt_#{opts.number}.nuc"
+  isPep = "F"
+else
+  outF = "phylodb_nr_#{opts.number}.pep"
+  isPep = "T"
+end
+
+if !File.exists?(outF)
+  out = File.new(outF, "w")
+  spHash = Hash.new
+  STDERR << "Loading Species info...\n"
+  db.query("SELECT DISTINCT taxon_id, species, strain FROM contigs").each do |record|
+    taxon_id, species, strain = record
+    species += " #{strain}" if !species.include?(strain)
+    spHash[taxon_id] = species
+  end
+  STDERR << "Writing Phylodb...\n"
+  
+  prevseg = nil
+  seguid = nil
+  seqs = []
+  names = []
+  anns = []
+  flags = []
+  taxons = []
+  
+  if opts.nuc
+    sql =  "SELECT seguid, transcripts.name, annotation, transcripts.seq, "
+    sql += "taxon_id, protein_flag FROM proteins, transcripts "
+    sql += "WHERE transcripts.name = proteins.name ORDER BY seguid"
+  else
+    sql = "SELECT seguid, name, annotation, seq, taxon_id, "
+    sql += "protein_flag FROM proteins ORDER BY seguid"
+  end
+  sql += " LIMIT #{opts.limit}" if opts.limit
+  db.query(sql).each do |record|
+    seguid, name, ann, seq, taxon_id, flag = record
+    if seguid != prevseg && !prevseg.nil?
+      s = seqs.sort.last
+      header = make_header(prevseg, names, anns, spHash, taxons, flags)
+      out.print to_fasta(s, header) if s.to_s.length > 0
+      names = []
+      anns = []
+      flags = []
+      taxons = []
+      seqs = []
+    end
+    next if seq.nil? || seq.to_i.to_s == seq
+    names.push(name)
+    seqs.push(seq)
+    anns.push(ann.split("\t").first)
+    taxons.push(taxon_id)
+    flags.push(flag_string(flag))
+    prevseg = seguid
+  end
+  if names.size > 0
+    header = make_header(seguid, names, anns, spHash, taxons, flags)
+    out.print to_fasta(seqs.sort.last, header)
+  end
+  out.close
+  system("formatdb -p#{isPep} -oT -i #{outF}")
+end
+
+used = File.new("usedTaxa.#{opts.number}.tab", "w")
+STDERR << "Writing usedTaxa.#{opts.number}.tab...\n"
+db.query("SELECT taxon_id, name, parent_id, rank FROM taxonomy ORDER BY taxon_id").each do |record|
+  tid, name, parent, rank = record
+  used.print [tid.to_s, name, parent.to_s, rank].join("\t") + "\n"
+end
+used.close
+orgs = File.new("organisms.#{opts.number}.tab", "w")
+STDERR << "Writing organisms.#{opts.number}.tab...\n"
+db.query("SELECT DISTINCT taxon_id FROM contigs").each do |record|
+  id = record.first.to_i
+  tx = recurseTaxonomy(db, id)
+  orgs.print id.to_s + "\t"+ tx.join(";") + "\n" 
+end
+orgs.close
+db.close
