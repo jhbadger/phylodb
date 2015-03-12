@@ -8,3 +8,5 @@ information if run without arguments.
 
 
 writePhyloDB		Writes flatfile from mysql phylodb database
+splitPhyloDB.jl		script for splitting phylodb into sections for sub-blasts	
+loadPhyloDB		script for adding organism(s) to phylodb given contigs.txt, proteins.txt, optionally transcripts.txt, geneorders.txt rrnas.txt
