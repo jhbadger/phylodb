@@ -1,0 +1,297 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'bio'
+require 'digest/sha1'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :input, "genbank file(s) to process", :type=>:strings, :required=>true
+   opt :prefix, "prefix for merged file", :type=>:string, :default=>"all"
+   opt :separate, "separate files for each accession"
+   opt :flag, "phylodb category flag", :type=>:integer, :default=> 0
+   opt :phylodb, "output tab files for uploading to phylodb"
+   opt :seguid, "print seqguid in header"
+end
+
+# classify type of molecule given definition string
+def classifyMolecule(definition)
+   if (definition =~ /plasmid/i)
+      return "Plasmid"
+   elsif (definition =~ /mitochon/i)
+      return "Mitochondria"
+   elsif (definition =~ /plastid|chloroplast/i)
+      return "Plastid"
+   elsif (definition =~ /chromosome\s*([^\s,]+)/i )
+      return "Chromosome " + $1
+   else
+      return "Chromosome"
+   end
+end
+
+class String
+   def seguid
+      final = self.upcase.scan(/[A-Z]/).join
+      [Digest::SHA1.digest(final)].pack("m").chomp("=\n")
+   end
+end
+
+def flag_string(flag_num)
+   flag_num = flag_num.to_i
+   if flag_num == 1 || flag_num == 2
+      "kegg"
+   elsif flag_num == 5
+      "chloro"
+   elsif flag_num == 6
+      "mito"
+   else
+      "rest"
+   end
+end
+
+
+# return sequence from genbank range
+def getSequence(seq, locations)
+   subseq = ""
+   locations.each do |loc|
+      if (loc.strand == 1)
+         subseq +=  seq[(loc.from - 1)..(loc.to - 1)]
+      elsif (loc.strand == -1)
+         subseq += Bio::Sequence::NA.new(seq[(loc.from - 1)..(loc.to - 1)]).complement.seq
+      else
+         STDERR.printf("Error: I don't know how to handle #{locations}\n")
+         exit(1)
+      end
+   end
+   return subseq
+end
+
+
+pep, cds, rna, trna, ent, con = nil
+
+if !opts.separate
+   pep = File.new(opts.prefix + ".pep", "w")
+   cds = File.new(opts.prefix + ".cds", "w")
+   rna = File.new(opts.prefix + ".rRNA", "w")
+   trna = File.new(opts.prefix + ".tRNA", "w")
+   ent = File.new(opts.prefix + ".ent", "w")
+   att = File.new(opts.prefix + ".att", "w")
+   con = File.new(opts.prefix + ".con", "w")
+end
+
+if opts.phylodb
+   contigsTbl = File.new("contigs.txt", "w")
+   protTbl = File.new("proteins.txt", "w")
+   rrnaTbl = File.new("rrnas.txt", "w")
+   cdsTbl = File.new("transcripts.txt", "w")
+   geneorderTbl = File.new("geneorders.txt", "w")
+end
+
+org = ""
+opts.input.each do |gb|
+   Bio::FlatFile.new(Bio::GenBank, File.new(gb)).each do |genome|
+      organism = genome.organism
+      if (organism == "")
+         organism = genome.definition.split(" ")[0].to_s + " " + genome.definition.split(" ")[1].to_s
+      end
+      acc = genome.accession || ""
+      acc = genome.locus.entry_id || "" if acc == ""
+      if (genome.definition =~/Contig (scaffold[0-9]*)/)
+         acc = $1
+      end
+      if (acc.index("scaffold:")) # EnsEmbl format
+         acc = acc.gsub("scaffold:","").split(":")[0..1].join("_")
+      end
+      orfname = "ORF0000"
+      rnaname = "RNA0000"
+      proteins = 0
+      trnas = 0
+      rrnas = 0
+      strain = ""
+      taxon_id = ""
+      gene_location = nil
+      gene_strand = nil
+      product = ""
+      dna = genome.seq
+      next if (dna.length == 0) # skip empty records
+      if (opts.separate)
+         pep = File.new(acc + ".pep", "w")
+         cds = File.new(acc + ".cds", "w")
+         rna = File.new(acc + ".rRNA", "w")
+         trna = File.new(acc + ".tRNA", "w")
+         ent = File.new(acc + ".ent", "w")
+         att = File.new(acc + ".att", "w")
+         con = File.new(acc + ".con", "w")
+      end
+      if (org != organism)
+         STDERR.printf("Processing %s...\n", organism) if (organism != "")
+         org = organism
+      end
+      # process each CDS, rRNA. tRNA
+      genome.features.each do |feature|
+         product = feature["product"].first if (product == "" && feature["product"])
+         if feature["gene"].to_a.first == "16S"
+            product = "16S rRNA"
+         end
+         if feature["gene"].to_a.first == "23S"
+            product = "23S rRNA"
+         end
+         if feature["gene"].to_a.first == "5S"
+            product = "5S rRNA"
+         end
+         if feature["gene"].to_a.first == "18S"
+            product = "18S rRNA"
+         end
+         if feature["gene"].to_a.first == "28S"
+            product = "28S rRNA"
+         end
+         if feature.feature == "source" # contains taxon_id info
+            feature.qualifiers.each do |qual|
+               if (qual.value =~/taxon:([0-9]+)/)
+                  taxon_id = $1
+               end
+            end
+         elsif feature.feature == "gene"
+            feature.qualifiers.each do |qual|
+               product = qual.value if (qual.qualifier == "note")
+            end
+            gene_location = feature.position
+            if (gene_location =~/([0-9]+)\.\.([0-9]+)/)
+               gene_location = [$1,$2]
+               if (feature.position =~/complement/)
+                  gene_strand = "-1"
+               else
+                  gene_strand = "1"
+               end
+            end
+         elsif feature.feature == "CDS" # proteins and their associated cds
+            cds_name = nil
+            translation = nil
+            feature.qualifiers.each do |qual|
+               if (qual.value =~/GI:/)
+                  cds_name = qual.value.downcase.gsub(":","")
+               elsif (!cds_name && qual.qualifier == "protein_id")
+                  cds_name = qual.value
+               elsif (qual.qualifier == "translation")
+                  translation = qual.value
+               end
+            end
+            seq = getSequence(dna, feature.locations)
+            if (cds_name.nil?) # give it an orf name if none exist
+               cds_name = orfname
+               orfname.succ!
+            end
+            if (translation.nil?) # make one if none given
+               translation = Bio::Sequence::NA.new(seq).translate.seq
+            end
+            key = cds_name + "-" + acc
+            if (opts.seguid)
+               header = translation.seguid + " "
+            else
+               header= ""
+            end
+            header += key + " <<" + product.to_s + ">> {" + organism + "}"
+            header += " " + taxon_id.to_s if taxon_id
+            header += " " + flag_string(opts.flag) if opts.flag
+            pep.print Bio::Sequence::AA.new(translation).to_fasta(header, 60)
+            cds.print Bio::Sequence::AA.new(seq).to_fasta(header, 60)
+            if opts.phylodb
+               protTbl.print [key, key.split("-").last, product.to_s, translation,
+               taxon_id.to_s, opts.flag.to_s, translation.seguid].join("\t") + "\n"
+               cdsTbl.print [key, key.split("-").last, seq.upcase, opts.flag.to_s].join("\t") + "\n"
+            end
+            if (gene_location)
+               location = gene_location
+               strand = gene_strand
+               gene_location = nil
+            else
+               location = [feature.locations.first.from, feature.locations.first.to]
+               strand = feature.locations.first.strand
+            end
+            ent.print key + "\t" + cds_name + "\t" + location[0].to_s +
+            "\t" + location[1].to_s + "\t" + strand.to_s + "\t" +
+            product.to_s + "\n"
+            if opts.phylodb
+               geneorderTbl.print [key, key.split("-").last, location[0].to_s, location[1].to_s, strand.to_s].join("\t") + "\n"
+            end
+            proteins += 1
+            product = ""
+         elsif feature.feature == "rRNA" || feature.feature == "tRNA" || feature.feature == "misc_RNA"
+            locus = ""
+            feature.qualifiers.each do |qual|
+               locus = qual.value if (qual.qualifier == "locus_tag")
+               product = qual.value if (qual.qualifier == "note" && product == "")
+            end
+            if (locus == "")
+               locus = rnaname
+               rnaname.succ!
+            end
+            key = locus.to_s + "-" + acc.to_s
+            header = key + " " + product.to_s + " {" + organism + "}"
+            seq = getSequence(dna, feature.locations)
+            if (product =~/rRNA|ribosomal/i || locus =~/rRNA/i)
+               out = rna
+               if product =~/([0-9]* S)/
+                  product = $1
+               end
+               rrnas += 1
+               if opts.phylodb
+                  rrnaTbl.print [key, key.split("-").last, product, seq.upcase].join("\t") + "\n"
+               end
+            else
+               out = trna
+               trnas += 1
+            end
+            out.print Bio::Sequence::AA.new(seq).to_fasta(header, 60)
+            ent.print key + "\t" + locus + "\t" + feature.locations.first.from.to_s +
+            "\t" + feature.locations.first.to.to_s + "\t" +
+            feature.locations.first.strand.to_s + "\t" + product.to_s + "\n"
+            product = ""
+         end
+      end
+      taxonomy = genome.taxonomy.chop
+      att.print acc + "\t" + genome.seq.length.to_s + "\t"
+      att.print organism + "\t" + strain + "\t" + taxon_id + "\t"
+      att.print taxonomy.gsub(",", "") + "\t" + classifyMolecule(genome.definition) + "\t"
+      att.print proteins.to_s + "\t" + rrnas.to_s + "\t" + trnas.to_s + "\t"
+      gc =  (dna.count("g") + dna.count("c")) / (1.0 * dna.length)
+      att.print sprintf("%5.2f%%\n", gc * 100)
+      header = acc + " " + genome.definition
+      con.print Bio::Sequence::AA.new(dna).to_fasta(header, 60)
+      if opts.phylodb
+         contigsTbl.print [acc, organism, strain.to_s, taxon_id,
+            taxonomy, "", "", classifyMolecule(genome.definition),
+         dna.upcase, Date.today.to_s, opts.flag.to_s, ""].join("\t") + "\n"
+      end
+      if(opts.separate)
+         att.close
+         pep.close
+         cds.close
+         rna.close
+         trna.close
+         ent.close
+         con.close
+      end
+   end
+end
+
+if !opts.separate
+   att.close
+   pep.close
+   cds.close
+   rna.close
+   trna.close
+   ent.close
+   con.close
+end
+
+
+if opts.phylodb
+   contigsTbl.close
+   protTbl.close
+   rrnaTbl.close
+   cdsTbl.close
+   geneorderTbl.close
+end

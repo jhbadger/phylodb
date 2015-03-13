@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+
+$VERBOSE=nil
+VER = "1.0"
+DATE = "11/18/2014"
+
+require 'trollop'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+  banner File.basename($0) << " " << VER << " " << DATE
+  opt :input, "input usedTaxa file", :type => :string, :required=>true
+end
+
+print("
+{\"nodes\":
+    [\n")
+
+first = true
+File.new(opts.input).each do |line|
+  num, name, parnum, rank = line.chomp.split("\t")
+  rank = "superkingdom" if rank == "kingdom"
+  print ",\n" if !first 
+  first = false
+  printf("{\"name\":\"%s\", \"divid\":0, \"rank\":\"%s\", \"id\":%d, \"idpar\":%d}", name, rank, num, parnum)
+end
+
+print("   ]
+}")

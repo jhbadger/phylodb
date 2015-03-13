@@ -1,0 +1,89 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+$VERBOSE=nil
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+  banner File.basename($0)
+  opt :nt, "base nucleotide file(s)", :type =>:strings, :required=>true
+  opt :cds, "base cds file(s)", :type=>:strings, :required=>true
+  opt :aa, "base aa file(s)", :type=>:strings, :required=>true
+  opt :exclude, "file to exclude", :type=>:string
+end
+
+ncbi, ncbi_line = get_ncbi_taxonomy
+contigs = File.new("contigs.txt", "w")
+transcripts = File.new("transcripts.txt", "w")
+proteins = File.new("proteins.txt", "w")
+geneorders = File.new("geneorders.txt", "w")
+
+excluded = Hash.new
+if opts.exclude
+  File.new(opts.exclude).each do |line|
+    name, rest = line.chomp.split(" ")
+    excluded[name] = true
+  end
+end
+
+opts.nt.each do |nt|
+  sname = File.basename(nt).split(".nt").first
+  if !excluded[sname]
+    STDERR << "Processing " << nt << "\n"
+    aa = opts.aa.grep(/#{sname}/).first
+    cds = opts.cds.grep(/#{sname}/).first
+    if !aa
+      STDERR << "Missing aa data for " << sname << "\n"
+    end
+    if !cds
+      STDERR << "Missing cds data for " << sname << "\n"
+    end
+    if aa && cds
+      seennt=Hash.new
+      taxonomy = nil
+      FastaParser.new(nt).each do |name, desc, seq|
+        mmhash = parseSlashDesc(desc)
+        org, tid = mmhash["ORGANISM"], mmhash["TAXON_ID"]
+        taxonomy = recurseTaxonomy(ncbi_line, tid.to_i).join(";") if taxonomy.nil?
+        form = "transcript"
+        contigs.print [name, org, "transcript", tid, taxonomy, "", "", form, seq.upcase,
+                       Date.today.to_s, "3", sname].join("\t") + "\n"
+        seennt[name] = true
+      end
+      ncgr = Hash.new
+      STDERR << "Processing " << aa << "\n"
+      FastaParser.new(aa).each do |name, desc, seq|
+        mmhash = parseSlashDesc(desc)
+        contig, start, stop, strand = mmhash["DNA_ID"], mmhash["DNA_START"], mmhash["DNA_END"], mmhash["DNA_ORIENTATION"]
+        tid = mmhash["TAXON_ID"]
+        ncgr[mmhash["NCGR_PEP_ID"]] = [name, contig]
+        strand = "1" if strand == "+"
+        strand = "-1" if strand == "-"
+        if seennt[contig]
+          geneorders.print [name + "-" + contig, contig, start, stop, strand].join("\t") + "\n"
+          proteins.print [name + "-" + contig, contig, "", seq, tid, "3", seq.seguid].join("\t") + "\n"
+        else
+          STDERR << "No such nt seq for " << contig << "\n"
+        end
+      end
+      STDERR << "Processing " << cds << "\n"
+      FastaParser.new(cds).each do |name, desc, seq|
+        if ncgr[name]
+          pname, contig = ncgr[name]
+          transcripts.print [pname+"-"+contig, contig, seq.upcase, "3"].join("\t") + "\n"
+        else
+          STDERR << "No peptide for " << name << "\n"
+        end
+      end
+    end
+  end
+end
+
+contigs.close
+transcripts.close
+proteins.close
+geneorders.close

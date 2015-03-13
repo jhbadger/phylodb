@@ -1,0 +1,194 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'mysql'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :host, "phylodb database host", :required=>true, :type=>:string
+   opt :output, "output for taxonomy", :default=>"viral_taxonomy.txt"
+end
+
+db = Mysql.new(opts.host, "apis", "apis_user", "phylodb")
+out = File.new(opts.output, "w")
+
+ncbi, ncbi_line = get_ncbi_taxonomy # download and parse NCBI taxonomy if haven't already
+
+parents = Hash.new
+levels = Hash.new
+tids = []
+STDERR << "Querying Database...\n"
+db.query("SELECT DISTINCT taxon_id, species FROM contigs WHERE taxonomy LIKE 'Viruses%'").each do |row|
+   tid, sp = row
+   tax = recurseTaxonomy(ncbi_line, tid.to_i)
+   level = tax.grep(/unclassified [T[0-9]-like viruses|Picornaviridae|phiKMV|coronaviruses|AHJD|Old|Avastrovirus|Begomovirus|Carlavirus|Cosavirus|Enterovirus|Iflavirus|Norovirus]/)
+   if !level.empty?
+      tax.delete(level.first)
+   end
+   # shorten taxonomy
+   tax.delete("Severe acute respiratory syndrome-related coronavirus")
+   tax.delete("Alphacoronavirus 1")
+   tax.delete("Alphacoronavirus")
+   tax.delete("Betacoronavirus")
+   tax.delete("Gammacoronavirus")
+   tax.delete("Deltacoronavirus")
+   tax.delete("Rhinovirus B")
+   tax.delete("Aichivirus A")
+   tax.delete("Aichivirus B")
+   tax.delete("Aichivirus C")
+   tax.delete("Rubulavirus")
+   tax.delete("Comovirus")
+   tax.delete("Pneumovirinae")
+   tax.delete("Morbillivirus")
+   tax.delete("Mammalian virus group")
+   tax.delete("Nepovirus")
+   tax.delete("Influenza A virus")
+   tax.delete("Influenzavirus A")
+   tax.delete("Subgroup B")
+   tax.delete("Respirovirus")
+   tax.delete("Sapovirus")
+   tax.delete("Sapporo virus")
+   tax.delete("Fabavirus")
+   tax.delete("Murine leukemia virus")
+   tax.delete("Betacoronavirus 1")
+   tax.delete("Subgroup A")
+   tax.delete("Avulavirus")
+   tax.delete("Murine coronavirus")
+   tax.delete("Broad bean wilt virus 2")
+   tax.delete("Subgroup C")
+   tax.delete("Henipavirus")
+   tax.delete("unclassified Rubulavirus")
+   tax.delete("Torovirinae")
+   tax.delete("Avian coronavirus")
+   tax.delete("Sapovirus GII")
+   tax.delete("Rauscher murine leukemia virus")
+   tax.delete("Murine pneumonia virus")
+   tax.delete("Sapovirus C12")
+   tax.delete("Murine hepatitis virus strain JHM")
+   tax.delete("Sapovirus Hu/Dresden/pJG-Sap01/DE")
+   tax.delete("Sapovirus unknown genotype")
+   tax.delete("Arabis mosaic virus")
+   tax.delete("Kakugo virus")
+   tax.delete("Broad bean wilt virus 1")
+   tax.delete("Dolphin morbillivirus")
+   tax.delete("Cetacean morbillivirus")
+   tax.delete("Raspberry ringspot virus")
+   tax.delete("Human coronavirus OC43")
+   tax.delete("Tobacco ringspot virus")
+   tax.delete("Ectropis obliqua picorna-like virus")
+   tax.delete("Ectropis obliqua virus")
+   tax.delete("Fer-de-lance virus")
+   tax.delete("Ferlavirus")
+   tax.delete("Goose paramyxovirus SF02")
+   tax.delete("Royal Farm virus")
+   tax.delete("Simian immunodeficiency virus SIV-mnd 2")
+   tax.delete("Karshi virus")
+   tax.delete("Macaca fuscata rhadinovirus")
+   tax.delete("Simian immunodeficiency virus - mnd")
+   tax.delete("Alkhurma hemorrhagic fever virus")
+   tax.delete("Kyasanur forest disease virus")
+   tax.delete("Torovirus")
+   tax.delete("Bovine torovirus")
+   tax.delete("Breda virus")
+   tax.delete("Tioman virus")
+   tax.delete("Menangle virus")
+   tax.delete("Patchouli mild mosaic virus")
+   tax.delete("Enterobacteria phage T4 sensu lato")
+   tax.delete("Enterobacteria phage T4")
+   tax.delete("Tomato ringspot virus")
+   tax.delete("Grapevine fanleaf virus")
+   tax.delete("Porcine hemagglutinating encephalomyelitis virus")
+   tax.delete("Garlic latent virus")
+   tax.delete("Shallot latent virus")
+   tax.delete("Blackcurrant reversion virus")
+   tax.delete("Murine leukemia-related retroviruses")
+   tax.delete("Human parainfluenza virus 1")
+   tax.delete("Porcine endogenous retrovirus E")
+   tax.delete("Porcine type-C oncovirus")
+   tax.delete("Bovine coronavirus")
+   tax.delete("XMRV-related viruses")
+   tax.delete("Avian paramyxovirus 6")
+   tax.delete("XMRV")
+   tax.delete("Xenotropic MuLV-related virus VP62")
+   tax.delete("Bafinivirus")
+   tax.delete("White bream virus")
+   tax.delete("Nipah virus")
+   tax.delete("Newcastle disease virus B1")
+   tax.delete("Saffold virus")
+   tax.delete("Feline infectious peritonitis virus")
+   tax.delete("Bovine parainfluenza virus 3")
+   tax.delete("Bat SARS CoV Rp3/2004")
+   tax.delete("Bat coronavirus HKU3")
+   tax.delete("Hendra virus")
+   tax.delete("Bat SARS CoV Rf1/2004")
+   tax.delete("Murine hepatitis virus strain A59")
+   tax.delete("Bat SARS CoV Rm1/2004")
+   tax.delete("Pneumonia virus of mice J3666")
+   tax.delete("Human parainfluenza virus 3")
+   tax.delete("Murine type C retrovirus")
+   tax.delete("Aquamavirus")
+   tax.delete("Aquamavirus A")
+   tax.delete("Sendai virus")
+   tax.delete("Seal picornavirus type 1")
+   tax.delete("Moloney murine leukemia virus")
+   tax.delete("Equine coronavirus")
+   tax.delete("Sapovirus Mc10")
+   tax.delete("Infectious bronchitis virus")
+   tax.delete("Turkey coronavirus")
+   tax.delete("Human TMEV-like cardiovirus")
+   tax.delete("Gentian mosaic virus")
+   tax.delete("Mikania micrantha mosaic virus")
+   tax.delete("Cosavirus A")
+   tax.delete("Sapovirus GIII")
+   tax.delete("Porcine enteric sapovirus")
+   tax.delete("Human cosavirus A")
+   tax.delete("Rat coronavirus Parker")
+   tax.delete("Salivirus")
+   tax.delete("Salivirus A")
+   tax.delete("Salivirus NG-J1")
+   tax.delete("Epizootic hemorrhagic disease virus")
+   tax.delete("Friend murine leukemia virus")
+   tax.delete("Epizootic hemorrhagic disease virus 1")
+   tax.delete("Epizootic hemorrhagic disease virus (serotype 1 / strain New Jersey)")
+   tax.delete("Kobuvirus pig/JY-2010a/CHN")
+   level = tax.grep(/Enterovirus [A-Z|0-9]/)
+   tax.delete(level.first)
+   # add species if needed to gain length
+   if tax.length < 7 && tax.length > 1
+      tax.insert(-2, sp.tr(" ","_")+"_Species")
+      # add genus if needed to gain length
+      if tax.length < 7
+         g = sp.tr(" ","_")+"_Genus"
+         tax.insert(-3, g)
+      end
+      # and another if needed to gain length
+      if tax.length < 7
+         g = sp.tr(" ","_")+"_Family"
+         tax.insert(-4, g)
+      end
+      # You get the drill
+      if tax.length < 7
+         g = sp.tr(" ","_")+"_Order"
+         tax.insert(-5, g)
+      end
+      if tax.length < 7
+         g = sp.tr(" ","_")+"_Class"
+         tax.insert(-6, g)
+      end
+   end
+   # delete repeats if too long
+   if tax.length > 7 && tax[-1].index(tax[-2])
+      tax.delete(tax[-2])
+   end
+   tax.pop
+   tax.push(sp) # use form of species already in database
+   out.print [tid,tax.join(";")].join("\t") + "\n" if tax.size>1
+end
+
+db.close
+out.close

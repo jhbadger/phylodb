@@ -1,0 +1,48 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :taxstring, "taxstring.txt", :type=>:string, :required=>true
+   opt :patch, "patch file for fixing problems", :type=>:string
+   opt :custom, "custom taxonomy file for things not in official taxonomies", :type=>:string
+   opt :output, "output file for applying patch", :type=>:string
+end
+
+custom = Hash.new
+if opts.custom
+   File.new(opts.custom).each do |line|
+      tid, tx = line.chomp.split(" ", 2)
+      custom[tid.to_i] = tx
+   end
+end
+
+if (opts.custom || opts.patch) && opts.output
+   patch = Hash.new
+   File.new(opts.patch).each do |line|
+      from, to = line.chomp.split("\t")
+      patch[from] = to
+   end
+   out = File.new(opts.output, "w")
+   File.new(opts.taxstring).each do |line|
+      tid, tx = line.chomp.split(" ", 2)
+      tid = tid.to_i
+      if custom[tid]
+         line = [tid, custom[tid]].join("\t") + "\n"
+      end
+      out.print patch_taxonomy(line, patch)
+   end
+   out.close
+end
+
+if opts.patch && opts.output
+   check_taxonomic_consistency(opts.output)
+else
+   check_taxonomic_consistency(opts.taxstring)
+end

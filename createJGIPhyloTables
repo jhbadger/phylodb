@@ -1,0 +1,158 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :input, "jgi tab file with taxon_oid information", :type=>:string, :required=>true
+   opt :silva, "silva taxonomy", :type=>:string, :required=>true
+end
+
+ncbi, ncbi_line = get_ncbi_taxonomy
+silva = loadSilva(opts.silva)
+
+contigs = File.new("contigs.txt", "w")
+transcripts = File.new("transcripts.txt", "w")
+proteins = File.new("proteins.txt", "w")
+geneorders = File.new("geneorders.txt", "w")
+custom = File.new("jgi_custom_tax.txt","w")
+
+File.new(opts.input).each do |line|
+   next if line=~/^taxon_oid/
+   tid = line.chomp.split("\t").first
+   url = "http://img.jgi.doe.gov/cgi-bin/w/main.cgi?section=TaxonDetail&downloadAAAFile=1&taxon_oid=NNN&_noHeader=1"
+   nurl = url.gsub("NNN",tid)
+   ["TaxonFnaFile", "TaxonGenesFnaFile", "TaxonFaaFile"].each do |t|
+      out = tid + "." + t.gsub("File","")
+      if !File.exists?(out)
+         STDERR << "Downloading " << out << "\n"
+         system("wget -U \"\" \"#{nurl.gsub("AAA", t)}\" -O #{out}")
+         sleep 1
+      end
+   end
+   tax = nil
+   sp = nil
+   ntid = nil
+   contig = nil
+   genus = nil
+   FastaParser.new(tid + ".TaxonFna").each do |name, desc, seq|
+      contig, sp = desc.split(" ",2)
+      sp = sp.split(" : ").first
+      sp = sp.split(" (").first
+      genus = sp.split(" ").first
+      sp = "Oscillatoria nigro-viridis PCC 7112" if sp =~/Oscillatoria sp. PCC 7112/
+      sp = "Cyanobacterium aponinum PCC 10605" if sp =~/Cyanobacterium sp. PCC 10605/
+      sp = "Treponema caldaria DSM 7334" if sp =~/Spirochaeta caldaria H1/
+      sp = "Spirulina subsalsa PCC 9445" if sp=~/Spirulina sp. PCC 9445/
+      sp = "Sphaerochaeta coccoides DSM 17374" if sp=~/Spirochaeta coccoides/
+      sp = "Pseudanabaena biceps PCC 7429" if sp=~/Pseudanabaena sp. PCC 7429/
+      sp = "Caldanaerobius polysaccharolyticus DSM 13641" if sp =~ /Caldanaerobius polysaccharolyticum/
+      sp = "Candidatus Poribacteria sp. WGA-3G" if sp =~/Poribacteria WGA-3G/
+      sp = "Chamaesiphon minutus PCC 6605" if sp =~/Chamaesiphon sp. PCC 6605/
+      sp = "candidate division OD1 bacterium SCGC AAA040-L21" if sp =~/candidate division ZB26 bacterium SCGC AAA040-L21/
+      sp = "candidate division OD1 bacterium SCGC AAA010-E09" if sp =~/AAA010-E09/
+      sp = "candidate division OD1 bacterium SCGC AB-164-E21" if sp=~/AB-164-E21/
+      sp = "Candidatus Poribacteria sp. WGA-4CII" if sp=~/WGA-4CII/
+      sp = "candidate division OD1 bacterium SCGC AAA255-P19" if sp=~/AAA255-P19/
+      sp = "Oscillatoria formosa PCC 6407" if sp=~/Oscillatoria sp. PCC 6407/
+      sp = "Kyrpidia tusciae DSM 2912" if sp =~/Bacillus tusciae DSM 2912/
+      sp = "Leptolyngbya boryana PCC 6306" if sp =~/Leptolyngbya sp. PCC 6306/
+      ntid = ncbi[sp]
+      if !ntid && ncbi[sp.gsub(/ [A-Z|a-z|0-9|-]+,/,"")]
+         sp = sp.gsub(/ [A-Z|a-z|0-9|-]+,/,"")
+         ntid = ncbi[sp]
+      end
+      if !ntid && ncbi[sp.split(/ chromosome| plasmid|,/).first]
+         sp = sp.split(/ chromosome| plasmid|,/).first
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/(.* DSM [A-Z|a-z|0-9|-]+)/)
+         sp = $1
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/(STM[A-Z|a-z|0-9|-]+)/)
+         sp.gsub!("STM","STM ")
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index("bv ")
+         sp.gsub!("bv ","bv. ")
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/(ES [0-9]+, )/)
+         sp.gsub!($1,"")
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/( GKNTAUT ,)/)
+         sp.gsub!($1,"")
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/([A-Z|a-z|0-9|-]+, DSM)/)
+         sp.gsub!($1,"DSM")
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/([VPI|JIM] DSM)/)
+         sp.gsub!($1,"DSM")
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/(cluster bacterium sp.)/)
+         sp.gsub!($1,"cluster bacterium")
+         ntid = ncbi[sp]
+      end
+      if !ntid && sp.index(/(IADSM|AHN DSM|SEBR DSM|USADSM|Fx DSM|Kondo DSM|UW DSM|LB DSM|VPDSM|YIDSM|PC DSM|YU DSM)/)
+         sp.gsub!($1,"DSM")
+         ntid = ncbi[sp]
+      end
+      STDERR << "Processing " << sp << " (" << tid << ")...\n"
+      if !ntid
+         STDERR << "No tid for " << sp << "\n"
+         exit(1)
+      else
+         tax = recurseTaxonomy(ncbi_line, ntid)
+      end
+      break
+   end
+   FastaParser.new(tid + ".TaxonFna").each do |name, desc, seq|
+      contig, rest = desc.split(" ", 2)
+      contigs.print [contig, sp, "", ntid, tax.join(";"), "", "", "genome", seq.upcase,
+      Date.today.to_s, "3", ""].join("\t") + "\n"
+   end
+   seen = Hash.new
+   FastaParser.new(tid + ".TaxonFaa").each do |name, desc, seq|
+      name, rest = desc.split(" ",2)
+      ann = rest.split(" [").first
+      ann = "hypothetical protein" if ann=~/^\[/
+      begin
+         proteins.print [name + "-" + contig, contig, ann, seq, ntid, "3", seq.seguid].join("\t") + "\n"
+         seen[name] = true
+      rescue
+         STDERR << "error: " << $! << "\n"
+         STDERR << "tax_oid: " << tid << "\n"
+         STDERR << "species: " << sp << "\n"
+         STDERR << "name: " << name << "\n"
+         STDERR << "contig: " << contig << "\n"
+         exit(1)
+      end
+   end
+   FastaParser.new(tid + ".TaxonGenesFna").each do |name, desc, seq|
+      name, rest = desc.split(" ",2)
+      start, stop = rest.split("..")
+      strand = "-1"
+      strand = "1" if rest.index("+")
+      if seen[name]
+         geneorders.print [name + "-" + contig, contig, start.to_i, stop.to_i, strand].join("\t") + "\n"
+         transcripts.print [name+"-"+contig, contig, seq.upcase, "3"].join("\t") + "\n"
+      end
+   end
+   custom.print [ntid, tax.join(";")].join("\t")+"\n" if !silva[genus]
+end
+
+contigs.close
+transcripts.close
+proteins.close
+geneorders.close
+custom.close

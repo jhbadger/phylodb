@@ -1,0 +1,133 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'csv'
+require 'net/ftp'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :input, "csv file to use as basis", :type =>:string, :required=>true
+end
+
+ncbi, ncbi_line = get_ncbi_taxonomy
+contigs = File.new("contigs.txt", "w")
+transcripts = File.new("transcripts.txt", "w")
+proteins = File.new("proteins.txt", "w")
+rrnas = File.new("rrnas.txt", "w")
+geneorders = File.new("geneorders.txt", "w")
+
+CSV.foreach(opts.input, :headers=>true, :converters => :numeric) do |row|
+   category = row["Category"]
+   sp = row["Species"]
+   tid = row["Taxonomy ID"]
+   if !File.exists?(sp + ".ncrna.gz")
+      STDERR << "Fetching " << sp << "...\n"
+      Net::FTP.open("ftp.ensemblgenomes.org") do |ftp|
+         ftp.login
+         if category == "bacteria"
+            dir = row["CoreDB"].split("_core").first
+            ftp.chdir("/pub/#{category}/current/fasta/#{dir}/#{sp}")
+            dna = ftp.nlst("dna/*dna.toplevel.fa.gz").first
+            cdna = ftp.nlst("cdna/*cdna.all.fa.gz").first
+            pep = ftp.nlst("pep/*pep.all.fa.gz").first
+            ncrna = ftp.nlst("ncrna/*ncrna.fa.gz").first
+            begin
+               ftp.getbinaryfile(dna, sp + ".dna.gz", 1024)
+               ftp.getbinaryfile(cdna, sp + ".cdna.gz", 1024)
+               ftp.getbinaryfile(pep, sp + ".pep.gz", 1024)
+               ftp.getbinaryfile(ncrna, sp + ".ncrna.gz", 1024)
+            rescue
+            end
+         end
+      end
+   end
+
+   seen = Hash.new
+   FastaParser.new(sp+".dna.gz").each do |name, desc, seq|
+      info = desc.split(" ").last
+      if info =~/supercontig/
+         s, sups, contig, start, stop, strand = info.split(":")
+         contig = sups + "_" + contig
+      else
+         s, contig, c, start, stop, strand = info.split(":")
+      end
+      seen[contig] = true
+      if ncbi_line[tid]
+         taxonomy = recurseTaxonomy(ncbi_line, tid).join(";")
+         species = taxonomy.split(";").last
+         genus, s, strain = species.split(" ", 3)
+         form = "Chromosome"
+         form = "Plasmid" if desc =~/plasmid/i
+         contigs.print [contig, species, strain, tid, taxonomy, "", "", form, seq.upcase,
+         Date.today.to_s, "3", ""].join("\t") + "\n"
+      else
+         STDERR << "There is no entry in NCBI for " << tid << "\n"
+         exit(1)
+      end
+   end
+   # [key, key.split("-").last, seq.upcase, opts.flag.to_s]
+   FastaParser.new(sp+".cdna.gz").each do |name, desc, seq|
+      gene = $1 if desc=~/gene:([^ ]+)/
+      ann = $1 if desc=~/description:\"([^\"]+)\"/
+      info = desc.split(" ")[1]
+      if info =~/supercontig/
+         s, sups, contig, start, stop, strand = info.split(":")
+         contig = sups + "_" + contig
+      else
+         s, contig, c, start, stop, strand = info.split(":")
+      end
+      if !seen[contig]
+         STDERR << contig << " not found in chromosomes for " << sp << "\n"
+         exit(1)
+      end
+      if gene.nil? || contig.nil?
+         STDERR << "I can't parse " << desc << "\n"
+         exit(1)
+      else
+         transcripts.print [gene+"-"+contig, contig, seq.upcase, "3"].join("\t") + "\n"
+         geneorders.print [gene+"-"+contig, contig, start, stop, strand].join("\t") + "\n"
+      end
+   end
+   FastaParser.new(sp+".pep.gz").each do |name, desc, seq|
+      gene = $1 if desc=~/gene:([^ ]+)/
+      ann = $1 if desc=~/description:\"([^\"]+)\"/
+      info = desc.split(" ")[1]
+      if info =~/supercontig/
+         s, sups, contig, start, stop, strand = info.split(":")
+         contig = sups + "_" + contig
+      else
+         s, contig, c, start, stop, strand = info.split(":")
+      end
+      seguid = seq.seguid
+      if !seen[contig]
+         STDERR << contig << " not found in choromosomes for " << sp << "\n"
+         exit(1)
+      end
+      proteins.print [gene + "-" + contig, contig, ann.to_s, seq,
+      tid, "3", seguid].join("\t") + "\n"
+   end
+   FastaParser.new(sp+".ncrna.gz").each do |name, desc, seq|
+      gene = $1 if desc=~/gene:([^ ]+)/
+      info = desc.split(" ")[1]
+      if info =~/supercontig/
+         s, sups, contig, start, stop, strand = info.split(":")
+         contig = sups + "_" + contig
+      else
+         s, contig, c, start, stop, strand = info.split(":")
+      end
+      if desc=~/(16S|18S|5S|23S|28S)/i
+         ann = $1.upcase + " ribosomal rRNA"
+         rrnas.print [gene+"-" + contig, contig, ann, seq].join("\t") + "\n"
+      end
+   end
+end
+contigs.close
+transcripts.close
+proteins.close
+rrnas.close
+geneorders.close

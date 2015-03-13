@@ -1,0 +1,56 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :proteins, "protein file", :type=>:string, :required=>true
+   opt :cds, "optional cds file", :type=>:string
+   opt :taxon_id, "taxon id for organism", :type=>:integer, :required=>true
+   opt :name, "name for fake contig", :type=>:string, :required=>true
+   opt :ann, "optional tab delimited annotation", :type=>:string
+end
+
+ncbi, ncbi_line = get_ncbi_taxonomy
+
+contigs = File.new("contigs.txt", "w")
+transcripts = File.new("transcripts.txt", "w")
+proteins = File.new("proteins.txt", "w")
+
+ann = Hash.new
+
+if opts.ann
+   File.new(opts.ann).each do |line|
+      name, a = line.chomp.split("\t")
+      ann[name] = a if !ann[name] || a.length > ann[name].length
+   end
+end
+
+tax = recurseTaxonomy(ncbi_line, opts.taxon_id)
+sp = tax.last
+contigs.print [opts.name, sp, "", opts.taxon_id, tax.join(";"), "", "", "genome", "", Date.today.to_s, "3", ""].join("\t") + "\n"
+
+seen = Hash.new
+FastaParser.new(opts.proteins).each do |name, desc, seq|
+   desc = "hypothetical protein" if desc.nil? || desc == ""
+   desc = ann[name] if ann[name]
+   proteins.print [name + "-" + opts.name, opts.name, desc, seq, opts.taxon_id, "3", seq.seguid].join("\t") + "\n"
+   seen[name] = true
+end
+
+if opts.cds
+   FastaParser.new(opts.cds).each do |name, desc, seq|
+      if seen[name]
+         transcripts.print [name+"-"+opts.name, opts.name, seq.upcase, "3"].join("\t") + "\n"
+      end
+   end
+end
+
+contigs.close
+transcripts.close
+proteins.close

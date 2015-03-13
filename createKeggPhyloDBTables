@@ -1,0 +1,232 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'csv'
+require 'digest/sha1'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :input, "csv file to use as basis", :type =>:string
+   opt :kegg, "kegg directory", :type=>:string, :required=>true
+   opt :abbr, "kegg abbrs to use (instead of csv)", :type=>:strings
+end
+
+
+# schema for "contigs" table
+# CREATE TABLE `contigs` (
+#   `name` varchar(50) COLLATE latin1_general_ci NOT NULL,
+#   `species` varchar(255) COLLATE latin1_general_ci DEFAULT NULL,
+#   `strain` varchar(255) COLLATE latin1_general_ci DEFAULT NULL,
+#   `taxon_id` int(11) NOT NULL DEFAULT '0',
+#   `taxonomy` text COLLATE latin1_general_ci,
+#   `old_taxonomy` text COLLATE latin1_general_ci,
+#   `supergroup` varchar(255) COLLATE latin1_general_ci DEFAULT NULL,
+#   `form` varchar(255) COLLATE latin1_general_ci DEFAULT NULL,
+#   `seq` longtext COLLATE latin1_general_ci,
+#   `updated` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+#   `contig_flag` tinyint(1) DEFAULT '0',
+#   `description` text COLLATE latin1_general_ci,
+#   PRIMARY KEY (`name`,`taxon_id`),
+#   KEY `form_index` (`form`),
+#   KEY `form_species` (`species`),
+#   KEY `contig_taxon_id` (`taxon_id`),
+#   KEY `KEGG_contig` (`contig_flag`)
+# ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_general_ci ROW_FORMAT=COMPACT$$
+
+makeKeggTaxonId("kegg_taxon_ids.txt") if !File.exists?("kegg_taxon_ids.txt")
+taxonomy = makeKeggTaxonomy(opts.kegg)
+
+taxonabbr = Hash.new
+spkegg = Hash.new
+File.new("kegg_taxon_ids.txt").each do |line|
+   abbr, num, sp = line.chomp.split("\t")
+   taxonabbr[num.to_i] = abbr
+   spkegg[num.to_i] = sp
+end
+exit(1)
+
+contigs_out = File.new("contigs.txt", "w")
+geneorders_out = File.new("geneorders.txt", "w")
+proteins_out = File.new("proteins.txt", "w")
+transcripts_out = File.new("transcripts.txt", "w")
+rrnas_out = File.new("rrnas.txt", "w")
+
+CSV.foreach(opts.input, :headers=>true, :converters => :numeric) do |row|
+   num = row["Taxon Id"]
+   abbr = taxonabbr[num]
+   kdir = Dir.glob(opts.kegg + "/")
+   genome = Dir.glob(opts.kegg + "/genes/organisms/" + abbr).first
+   next if !genome
+   kff = Dir.glob(genome + "/*.kff").first
+   if genome
+      fasta = Dir.glob(genome + "/*.genome").first
+      cinfo = Hash.new
+      STDERR << "Processing " << spkegg[num] << "...\n"
+      cnums = Hash.new
+      if fasta
+         FastaParser.new(fasta).each do |name, definition, seq|
+            if definition =~/\[([^\]]*)\] (.*)/
+               ncbi = $1
+               desc = $2
+               form = "genome"
+               genus, species, strain = spkegg[num].split(" ", 3)
+               if desc =~/(chromosome.*)/i
+                  form = $1
+               elsif desc =~/plasmid/i
+                  form = "plasmid"
+               elsif definition =~/\.MT/
+                  form = "mitochondrion"
+               end
+               updated = Date.today
+               contigs_out.print [ncbi, genus + " " + species, strain, num.to_s, taxonomy[num],taxonomy[num],"", form,
+               seq, updated.to_s, "1", definition].join("\t") + "\n"
+               cdesc = name.split(" ").first.split(":").last.split(abbr+".").last
+               cnums[cdesc] = ncbi
+               cnums["1"] = ncbi if !cnums["1"]
+            else
+               STDERR << "Cannot parse #{definition}\n"
+               exit(1)
+            end
+         end
+      else
+         seen = Hash.new
+         File.new(kff).each do |line|
+            locus, feature, aa, nuc, pos = line.chomp.split("\t")
+            cname = abbr+nuc
+            if !seen[cname]
+               seen[cname] = true
+               form = "contig " + nuc
+               genus, species, strain = spkegg[num].split(" ", 3)
+               updated = Date.today
+               contigs_out.print [cname, genus + " " + species, strain, num.to_s, taxonomy[num],taxonomy[num],"", form,
+               "", updated.to_s, "1", ""].join("\t") + "\n"
+               cnums["1"] = cname if !cnums["1"]
+            end
+         end
+      end
+
+      # CREATE TABLE `geneorders` (
+      #   `protein_name` varchar(100) COLLATE latin1_general_ci NOT NULL,
+      #   `contig_name` varchar(50) COLLATE latin1_general_ci NOT NULL,
+      #   `start` varchar(50) COLLATE latin1_general_ci NOT NULL,
+      #   `stop` varchar(50) COLLATE latin1_general_ci NOT NULL,
+      #   `strand` int(11) NOT NULL,
+      #   PRIMARY KEY (`protein_name`),
+      #   KEY `index_geneorders_stop` (`stop`),
+      #   KEY `index_geneorders_contig_name` (`contig_name`),
+      #   KEY `index_geneorders_start` (`start`)
+      # ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_general_ci ROW_FORMAT=COMPACT$$
+
+      def parsePos(pos)
+         if pos =~/complement/
+            strand = "-"
+         else
+            strand = "+"
+         end
+         locs = pos.scan(/([0-9]+)/).flatten.collect{|x| x.to_i}.sort
+         [locs.first, locs.last, strand]
+      end
+
+      contigs = Hash.new
+
+      File.new(kff).each do |line|
+         locus, feature, aa, nuc, pos = line.chomp.split("\t")
+         prefix, locus = locus.split(":")
+         if pos.index(":") # has gene pos (proks, mostly)
+            chrom, pos = pos.split(":")
+            if pos.nil?
+               pos = chrom
+               chrom = "gn:" + abbr
+            end
+            chrom = cnums[chrom] if cnums[chrom]
+            name = locus+"-"+chrom
+            contigs[locus] = chrom
+            if !chrom
+               STDERR << "No chrom for " << line
+               exit(1)
+            else
+               start, stop, strand = parsePos(pos)
+               geneorders_out.print [name, chrom, start, stop, strand].join("\t") + "\n"
+            end
+         elsif cnums[prefix]
+            contigs[locus] = cnums[prefix]
+         else
+            contigs[locus] = abbr+nuc
+         end
+      end
+
+      # CREATE TABLE `proteins` (
+      #   `name` varchar(100) COLLATE latin1_general_ci NOT NULL,
+      #   `contig_name` varchar(50) COLLATE latin1_general_ci NOT NULL,
+      #   `annotation` text COLLATE latin1_general_ci NOT NULL,
+      #   `seq` text COLLATE latin1_general_ci NOT NULL,
+      #   `taxon_id` int(11) DEFAULT NULL,
+      #   `protein_flag` tinyint(1) DEFAULT '0',
+      #   `seguid` varchar(27) COLLATE latin1_general_ci DEFAULT NULL,
+      #   PRIMARY KEY (`name`),
+      #   KEY `index_proteins_contig_name` (`contig_name`),
+      #   KEY `taxon_id` (`taxon_id`),
+      #   KEY `seguid` (`seguid`),
+      #   KEY `KEGG_protein` (`protein_flag`)
+      # ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_general_ci ROW_FORMAT=COMPACT$$
+      seen = Hash.new
+      prot = Dir.glob(genome + "/*.pep").first
+      FastaParser.new(prot).each do |name, definition, seq|
+         name = name.split(":").last
+         if !contigs[name]
+            STDERR << "No contig for " << name << "\n"
+            exit(1)
+            next
+         end
+         name +=  "-" + contigs[name]
+         seen[name] = true
+         locus, ann = definition.split(" ", 2)
+         proteins_out.print [name, name.split("-").last, ann, seq, num, "1", seq.seguid].join("\t")+"\n"
+      end
+
+
+      # CREATE TABLE `rrnas` (
+      #   `name` varchar(100) COLLATE latin1_general_ci NOT NULL,
+      #   `contig_name` varchar(50) COLLATE latin1_general_ci NOT NULL,
+      #   `annotation` varchar(255) COLLATE latin1_general_ci NOT NULL,
+      #   `seq` text COLLATE latin1_general_ci NOT NULL,
+      #   PRIMARY KEY (`name`),
+      #   KEY `index_rrnas_contig_name` (`contig_name`)
+      # ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_general_ci ROW_FORMAT=COMPACT$$
+      # CREATE TABLE `transcripts` (
+      #   `name` varchar(100) COLLATE latin1_general_ci NOT NULL,
+      #   `contig_name` varchar(50) COLLATE latin1_general_ci NOT NULL,
+      #   `seq` text COLLATE latin1_general_ci NOT NULL,
+      #   `transcript_flag` tinyint(1) DEFAULT NULL,
+      #   PRIMARY KEY (`name`),
+      #   KEY `index_transcripts_contig_name` (`contig_name`),
+      #   KEY `KEGG_transcript` (`transcript_flag`)
+      # ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_general_ci ROW_FORMAT=COMPACT$$
+
+
+      nuc = Dir.glob(genome + "/*.nuc").first
+      FastaParser.new(nuc).each do |name, definition, seq|
+         name = name.split(":").last
+         next if (!contigs[name])
+         name +=  "-" + contigs[name]
+         if definition.index("S ribosomal RNA") && !definition.index("methyltransferase")
+            if definition !~/truncated|not part/
+               rrnas_out.print [name, name.split("-").last, definition, seq].join("\t")+"\n"
+            end
+         elsif seen[name]
+            transcripts_out.print [name, name.split("-").last, seq, "1"].join("\t")+"\n"
+         end
+      end
+   end
+end
+
+contigs_out.close
+geneorders_out.close
+proteins_out.close
+transcripts_out.close
+rrnas_out.close

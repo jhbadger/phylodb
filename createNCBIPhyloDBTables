@@ -1,0 +1,36 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'csv'
+require 'bio'
+require 'digest/sha1'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :input, "csv file to use as basis", :type =>:string, :required=>true
+end
+
+gbk = File.new("ncbi.gbk", "w")
+Bio::NCBI.default_email = ENV["USER"] + "@jcvi.org"
+ncbi = Bio::NCBI::REST.new
+CSV.foreach(opts.input, :headers=>true, :converters => :numeric) do |row|
+   STDERR << "Fetching " << row["Species"] << "...\n"
+   row["Accs"].split(" ").each do |acc|
+      seq = ncbi.efetch(ids = [acc], {"db"=>"nucleotide", "rettype"=>"gb"})
+      if seq.index("ORIGIN")
+         gbk.print seq.gsub("\n\n", "\n") + "\n"
+      else
+         STDERR << acc << " has no sequence information!\n"
+      end
+   end
+end
+gbk.close
+
+parsegb = File.dirname(File.expand_path($0))+"/parseGenBank2PhyloDB"
+
+`#{parsegb} -h -i ncbi.gbk`
