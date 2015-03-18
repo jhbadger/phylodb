@@ -16,7 +16,7 @@ require 'update_utils'
 ARGV.push("--help") if ARGV.empty?
 opts = Trollop::options do
    banner File.basename($0)
-   opt :host, "phylodb database host", :default=>"mysql-lan-pro"
+   opt :host, "phylodb database host", :type=>:string, :required=>true
    opt :categories, "categories to pick from", :type=>:strings, :default=> ["Bacteria", "Fungi", "Viruses", "Protozoa"]
 end
 
