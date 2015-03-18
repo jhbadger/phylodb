@@ -5,15 +5,28 @@ Most of these scripts are written in Ruby. Some of them are in Julia
 for performance reasons. I design the scripts to give usage
 information if run without arguments.
 
+Requirements
+============
 
+Ruby (1.9+) gems (if not present type in bash: gem install <gem name>)
+----------------------------------------------------------------------
+bio
+digest/sha1
+mysql
+net/ftp
+open-uri
+trollop
 
-writePhyloDB		Writes flatfile from mysql phylodb database
-splitPhyloDB.jl		script for splitting phylodb into sections for sub-blasts	
-loadPhyloDB		script for adding organism(s) to phylodb given contigs.txt, proteins.txt, optionally transcripts.txt, geneorders.txt rrnas.txt
-generateTaxStrings.jl	generate phylodb taxonomy from scratch, using silva, pr2, viral taxonomy. Generally only used for major updates as minor tweaks lost
+Julia (0.3+) packages (if not present type in Julia prompt: Pkg.add("<package name>") 
+-------------------------------------------------------------------------------------
+ArgParse
 
+Files
+-----
+The eukaryotic taxonomy is taken from pr2
+http://5.196.17.195/pr2/download/entire_database/qiime_gb203_taxo.txt.gz
 
-== needed files ===
-The eukaryotic taxonomy is taken from pr2 -- http://ssu-rrna.org/pr2 using the qiime formatted taxonomy
+(uncompress; in fact currently need to uncompress twice as they've gzipped a gzipped file)
 
-The prokaryotic taxonomy is taken from SILVA (eg. http://www.arb-silva.de/fileadmin/silva_databases/current/Exports/taxonomy/taxmap_slv_ssu_119.txt)
+Prokaryotic taxonomy from SILVA
+http://www.arb-silva.de/fileadmin/silva_databases/current/Exports/taxonomy/taxmap_slv_ssu_nr_119.txt
