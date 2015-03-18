@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 
-require 'rubygems'
+
 require 'trollop'
 
 $:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
