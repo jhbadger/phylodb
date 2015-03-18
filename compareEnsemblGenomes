@@ -1,0 +1,60 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'digest/sha1'
+require 'mysql'
+require 'open-uri'
+require 'net/ftp'
+require 'csv'
+
+$VERBOSE=nil
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :host, "phylodb database host", :required=>true, :type=>:string
+   opt :categories, "categories to pick from", :type=>:strings, :default=> ["bacteria", "fungi", "protists"]
+end
+
+
+db = Mysql.new(opts.host, "access", "access", "phylodb")
+
+genera = Hash.new
+tids = Hash.new
+
+db.query("SELECT distinct taxon_id, species FROM contigs").each do |row|
+   tid, sp = row
+   genera[sp.split(" ").first] = true
+   tids[tid.to_i] = true
+end
+db.close
+
+rows = Hash.new
+opts.categories.each do |category|
+   Net::FTP.open("ftp.ensemblgenomes.org") do |ftp|
+      ftp.login
+      ftp.chdir("/pub/#{category}/current")
+      STDERR << "Looking at genomes from " << category << "...\n"
+      ftp.getbinaryfile("species_Ensembl#{category.capitalize}.txt", "rpt.txt", 1024)
+      CSV.foreach("rpt.txt", :headers=>true, :col_sep=>"\t") do |row|
+         genus = row["species"].split("_").first.capitalize
+         tid = row["taxonomy_id"].to_i
+         if !genera[genus] && !tids[tid]
+            rows[tid] = [row["species"], category, row["core_db"]]
+         end
+      end
+   end
+end
+
+STDERR << "Writing Spreadsheet...\n"
+out = File.new("ensembl_new.csv", "w")
+out.print ["Taxonomy ID", "Species", "Category", "CoreDB"].to_csv
+rows.keys.sort.each do |tid|
+   out.print ([tid] + rows[tid]).to_csv
+end
+File.unlink("rpt.txt")
+out.close

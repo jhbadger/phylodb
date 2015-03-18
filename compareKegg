@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'digest/sha1'
+require 'mysql'
+require 'open-uri'
+require 'csv'
+
+$:.unshift File.dirname(File.expand_path($0)) # put path of this script on require path
+require 'update_utils'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+   banner File.basename($0)
+   opt :host, "phylodb database host", :required=>true, :type=>:string
+   opt :kegg, "kegg directory", :type=>:string, :required=>true
+end
+
+if !File.exists?("phylodb.seguid")
+   begin
+      db = Mysql.new(opts.host, "access", "access", "phylodb")
+   rescue
+      STDERR << "Can't connect to phylodb with access user!\n"
+      exit(1)
+   end
+   writePhyloSeguid(db)
+   db.close
+end
+
+makeKeggTaxonId("kegg_taxon_ids.txt") if !File.exists?("kegg_taxon_ids.txt")
+
+taxonomy = makeKeggTaxonomy(opts.kegg)
+
+if !File.exists?("kegg.seguid") || File.size("kegg.seguid") == 0
+   if File.exists?(opts.kegg+"/genes/fasta/genes.pep")
+      out = File.new("kegg.seguid","w")
+      STDERR << "Calculating seguids for kegg...\n"
+      FastaParser.new(opts.kegg+"/genes/fasta/genes.pep").each do |name, desc, seq|
+         out.print name + "\t" + seq.seguid + "\n"
+      end
+      out.close
+   else
+      STDERR << "I can't find " << opts.kegg+"/fasta/genes.pep\n"
+      exit(1)
+   end
+end
+
+
+compareKeggPhyloDB(taxonomy, "phylodb.seguid", "kegg.seguid", "kegg_taxon_ids.txt")
+

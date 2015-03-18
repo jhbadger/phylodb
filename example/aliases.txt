@@ -1,0 +1,21 @@
+Shigella	Escherichia-Shigella
+Escherichia	Escherichia-Shigella
+Hafnia	Hafnia-Obesumbacterium
+Obesumbacterium	Hafnia-Obesumbacterium
+Silicibacter	Ruegeria
+Thalassiobium	Loktanella
+Bryantella	Marvinbryantia
+Lama	Vicugna
+Laminaria	Saccharina
+Halothece	Rubidibacter
+Haloarchaeal	Halobacterium
+Sinorhizobium	Ensifer
+Lama pacos	Vicugna pacos
+Rhodobacterales HTCC2083	Rhodobacteraceae bacterium HTCC2083
+Rhodobacterales bacterium HTCC2150	Rhodobacteraceae bacterium HTCC2150
+marine bacterium HP15	Marinobacter adhaerens HP15
+bacterium Ellin514	Pedosphaera parvula Ellin514
+Opitutaceae bacterium TAV2	Diplosphaera colitermitum TAV2
+TM7	Candidate division TM7
+Rhodobacterales bacterium HTCC2654	Maritimibacter alkaliphilus HTCC2654
+

@@ -1,0 +1,93 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'trollop'
+require 'mysql'
+
+ARGV.push("--help") if ARGV.empty?
+opts = Trollop::options do
+  banner File.basename($0)
+  opt :input, "tax num(s)", :type=>:strings, :required=>true
+  opt :file, "input is file, not tax nums themselves"
+  opt :taxonomy, "use taxonomy text file from phylodb not db", :type=>:string
+  opt :host, "phylodb database host", :type=>:string, :default=>"mysql-lan-pro"
+  opt :nodes, "use NCBI nodes.dmp", :type=>:string
+  opt :names, "use NCBI names.dmp (with nodes.dmp)", :type=>:string
+  opt :minlen, "only report taxonomies with fewer than n nodes", :type=>:integer
+  opt :maxlen, "only report taxonomies with more than n nodes", :type=>:integer
+  opt :unused, "report unused nodes"
+  opt :valid, "only report valid ranks"
+  opt :len, "report taxonomy length"
+  opt :verbose, "verbose messaging"
+end
+
+tax = Hash.new
+used = Hash.new
+
+if !opts.taxonomy && !opts.nodes
+  db = Mysql.new(opts.host, "access", "access", "phylodb")
+  sql = "SELECT taxon_id, name, parent_id, rank FROM taxonomy"
+  db.query(sql).each do |row|
+    current, name, parent, rank = row
+    tax[current.to_i] = [name, parent.to_i, rank]
+  end
+elsif opts.taxonomy
+  File.new(opts.taxonomy).each do |line|
+    current, name, parent, rank = line.chomp.split("\t")
+    tax[current.to_i] = [name, parent.to_i, rank]
+  end
+elsif opts.nodes
+  names = Hash.new
+  File.new(opts.names).each do |line|
+    num, name = line.chomp.split("\t|\t")
+    names[num.to_i] = name if !names[num.to_i]
+  end
+  File.new(opts.nodes).each do |line|
+    current, parent, rank = line.chomp.split("\t|\t")
+    tax[current.to_i] = [names[current.to_i], parent.to_i, rank]
+  end
+end
+
+def isValid?(rank)
+  ["kingdom","phylum","class","order","family","genus","species"].index(rank)
+end
+
+def recurseTaxonomy(tax, current, used, valid, verbose, count = 0)
+  name, parent, rank = tax[current]
+  used[current] = true
+  if (current == 1 || name.nil? || name == "Bacteria" || name == "Eukaryota" || name == "Viruses" || name == "Archaea" || count > 50)
+    [name]
+  else
+    if !valid || isValid?(rank)
+      print [current, name, parent, rank, 1].join("\t") + "\n" if verbose
+      recurseTaxonomy(tax, parent, used, valid, verbose, count + 1).to_a + [name]
+    else
+      recurseTaxonomy(tax, parent, used, valid, verbose, count + 1).to_a
+    end
+  end
+end
+
+
+if (opts.file)
+  ids = []
+  File.new(opts.input.first).each do |line|
+    id = line.chomp.split(/\s/).first.to_i
+    ids.push(id)
+  end
+else
+  ids = opts.input
+end
+
+ids.each do |id|
+  tx = recurseTaxonomy(tax, id.to_i, used, opts.valid, opts.verbose)
+  print tx.length.to_s + "\t" if opts.len
+  print [id,tx.join(";")].join("\t") + "\n"
+end
+
+if opts.unused
+  tax.keys.each do |key|
+    if !used[key] 
+      STDERR.print key.to_s + "\t" + tax[key].join("\t") + "\n"
+    end 
+  end
+end

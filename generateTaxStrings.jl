@@ -6,24 +6,18 @@ function parse_commandline()
     s = ArgParseSettings()
     
     @add_arg_table s begin
-        "species.txt"
-        help = "tab file from phylodb: taxon_id, species, taxonomy"
+        "organisms.txt"
+        help = "tab file from phylodb (taxon_id, taxonomy)"
         required = true
         arg_type = String
         "--aliases", "-a"
         help = "taxonomic aliases file (from, to)"
         arg_type = String
-        "--custom", "-c"
-        help = "custom taxonomy file (taxon_id, taxonomy)"
-        arg_type = String
         "--silva", "-s"
-        help = "silva taxonomy file (accession, taxonomy)"
+        help = "silva taxonomy file (accession, start, end, taxonomy)"
         arg_type = String
         "--pr2", "-p"
         help = "pr2 qiime taxonomy file (entry, taxonomy)"
-        arg_type = String
-        "--taxpatch", "-t"
-        help = "taxpatch file to fix problems (regexp, replacement)"
         arg_type = String
         "--viruses", "-v"
         help = "virus taxonomy file (taxon_id, taxonomy)"
@@ -44,7 +38,8 @@ function loadSilva(file)
         println(STDERR, "Loading silva...")
         fp = open(file)
         for line in eachline(fp)
-            silva, tx = split(chomp(line), " ", 2)
+            silva, start, stop, tx, sp = split(chomp(line), "\t")
+            tx *= ";$(sp)"
             tx = split(replace(tx, "Candidatus ",""), ";")
             if sort(tx) != sort(unique(tx)) # duplicated rank
                 newtx = String[]
@@ -90,19 +85,30 @@ function loadSilva(file)
 end
 
 function loadPr2(file)
-    info = Dict()
+    info = Dict{String, Array{String}}()
+    best = Dict{String, Integer}()
+    count = Dict{Array{String}, Integer}()
     if file != nothing
         println(STDERR, "Loading pr2...")
         fp = open(file)
         for line in eachline(fp)
             entry, tx = split(chomp(line), '\t', 2)
             tx = split(tx, ';')
-            pop(tx)
+            pop!(tx)
             genus = last(tx)
             if genus == "marine" || in("Organelle", tx)
                 continue
             end
-            info[genus] = tx
+            count[tx] = get(count, tx, 0) + 1
+            if !haskey(best, genus) || best[genus] < count[tx]
+                best[genus] = count[tx]
+            end
+        end
+        for (tx, num) in count
+            genus = last(tx)
+            if num == best[genus]
+              info[genus] = tx
+            end
         end
         close(fp)
     end
@@ -151,10 +157,8 @@ function processContigs(file, silva, pr2, viruses, custom, aliases)
     tax = Dict{Int, Array{String}}()
     sps = Dict{Int, String}()
     for line in eachline(fp)
-        if (chomp(line) == "" || length(split(line, '\t')) < 3)
-            continue
-        end
-        tid, sp, tx = split(chomp(line), '\t')
+        tid, tx = split(chomp(line), '\t')
+        sp = last(split(tx, ";"))
         if tid == "taxon_id"
             continue
         end
@@ -225,32 +229,9 @@ function processContigs(file, silva, pr2, viruses, custom, aliases)
     return tax, sps
 end
 
-function loadTaxPatch(taxpatch)
-    patch = Dict{Regex, String}()
-    if taxpatch != nothing
-        fp = open(taxpatch)
-        for line in eachline(fp)
-            from, to = split(chomp(line),'\t', 2)
-            patch[Regex(from)] = to
-        end
-        close(fp)
-    end
-    return patch
-end
-
-function patchTaxString(patch, taxstring)
-    for from in keys(patch)
-        if ismatch(from, taxstring)
-            taxstring = replace(taxstring, from, patch[from])
-        end
-    end
-    return taxstring
-end
-
-function printTax(file, taxpatch, tax, sps)
+function printTax(file, tax, sps)
     fp = open(file, "w")
     missing = 0
-    patch = loadTaxPatch(taxpatch)
     println("Writing taxstrings...")
     for tid in sort(collect(keys(tax)))
         tx = tax[tid]
@@ -269,7 +250,7 @@ function printTax(file, taxpatch, tax, sps)
         else
             tx[length(tx)] = sp
         end
-        taxstring = patchTaxString(patch, join(tx,";"))
+        taxstring = join(tx,";")
         println(fp, tid, '\t', taxstring)        
     end
     close(fp)
@@ -282,11 +263,11 @@ function main()
     silva = loadSilva(parsed_args["silva"])
     pr2 = loadPr2(parsed_args["pr2"])
     viruses = loadTaxonIdTaxonomy(parsed_args["viruses"])
-    custom = loadTaxonIdTaxonomy(parsed_args["custom"])
+    custom = loadTaxonIdTaxonomy(parsed_args["organisms.txt"])
     aliases = loadAliases(parsed_args["aliases"])
-    tax, sps = processContigs(parsed_args["species.txt"], 
+    tax, sps = processContigs(parsed_args["organisms.txt"], 
                                        silva, pr2, viruses, custom, aliases)
-    printTax(parsed_args["output"], parsed_args["taxpatch"], tax, sps)
+    printTax(parsed_args["output"], tax, sps)
 end
 
 main()
