@@ -10,6 +10,7 @@ ARGV.push("--help") if ARGV.empty?
 opts = Trollop::options do
    banner File.basename($0)
    opt :input, "taxonomy to check", :type=>:string, :required=>true
+   opt :levels, "taxomomic levels", :default=>7
 end
 
-check_taxonomic_consistency(opts.input)
+check_taxonomic_consistency(opts.input, opts.levels)

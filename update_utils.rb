@@ -314,21 +314,21 @@ end
 
 
 # is the taxonomy too long?
-def tax_too_long(tax)
+def tax_too_long(tax, levels)
    if tax[0] == "Eukaryota"
-      goodLen = 8
+      goodLen = levels + 1
    else
-      goodLen = 7
+      goodLen = levels
    end
    tax.length > goodLen
 end
 
 # is the taxonomy  too long?
-def tax_too_short(tax)
+def tax_too_short(tax, levels)
    if tax[0] == "Eukaryota"
-      goodLen = 8
+      goodLen = levels + 1
    else
-      goodLen = 7
+      goodLen = levels
    end
    tax.length < goodLen
 end
@@ -339,7 +339,7 @@ def check_taxonomic_length(tax)
 end
 
 # make sure every taxon has one and only one parent
-def check_taxonomic_consistency(file)
+def check_taxonomic_consistency(file, baselevelnum)
    parents = Hash.new
    levels = Hash.new
    prob = false
@@ -352,11 +352,11 @@ def check_taxonomic_consistency(file)
    File.new(file).each do |line|
       tag, taxonomy = line.chomp.split("\t")
       taxonomy = taxonomy.to_s.split(";")
-      if tax_too_short(taxonomy)
+      if tax_too_short(taxonomy, baselevelnum)
          scount += 1
          short.print line
          prob = true
-      elsif tax_too_long(taxonomy)
+      elsif tax_too_long(taxonomy, baselevelnum)
          lcount += 1
          long.print line
          prob = true
