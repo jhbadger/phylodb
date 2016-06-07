@@ -4,27 +4,26 @@ using ArgParse
 
 function parse_commandline()
     s = ArgParseSettings()
-    
     @add_arg_table s begin
         "organisms.txt"
         help = "tab file from phylodb (taxon_id, taxonomy)"
         required = true
-        arg_type = String
+        arg_type = ASCIIString
         "--aliases", "-a"
         help = "taxonomic aliases file (from, to)"
-        arg_type = String
+        arg_type = ASCIIString
         "--silva", "-s"
         help = "silva taxonomy file (accession, start, end, taxonomy)"
-        arg_type = String
+        arg_type = ASCIIString
         "--pr2", "-p"
         help = "pr2 qiime taxonomy file (entry, taxonomy)"
-        arg_type = String
+        arg_type = ASCIIString
         "--viruses", "-v"
         help = "virus taxonomy file (taxon_id, taxonomy)"
-        arg_type = String
+        arg_type = ASCIIString
         "--output", "-o"
         help = "output to file, not stdout"
-        arg_type = String
+        arg_type = ASCIIString
         default = "taxstrings.txt"
     end
     
@@ -42,7 +41,7 @@ function loadSilva(file)
             tx *= ";$(sp)"
             tx = split(replace(tx, "Candidatus ",""), ";")
             if sort(tx) != sort(unique(tx)) # duplicated rank
-                newtx = String[]
+                newtx = ASCIIString[]
                 prev = ""
                 for taxon in tx
                     suffix = "_"
@@ -56,7 +55,7 @@ function loadSilva(file)
                         push!(newtx, taxon)
                     end
                     if !haskey(parents, taxon)
-                        parents[taxon] = String[]
+                        parents[taxon] = ASCIIString[]
                     end
                     if !in(prev, parents[taxon])
                         push!(parents[taxon], prev)
@@ -85,14 +84,14 @@ function loadSilva(file)
 end
 
 function loadPr2(file)
-    info = Dict{String, Array{String}}()
-    best = Dict{String, Integer}()
-    count = Dict{Array{String}, Integer}()
+    info = Dict{ASCIIString, Array{ASCIIString}}()
+    best = Dict{ASCIIString, Integer}()
+    count = Dict{Array{ASCIIString}, Integer}()
     if file != nothing
         println(STDERR, "Loading pr2...")
         fp = open(file)
         for line in eachline(fp)
-            entry, tx = split(chomp(line), '\t', 2)
+            entry, tx = split(chomp(line), '\t', limit = 2)
             tx = split(tx, ';')
             pop!(tx)
             genus = last(tx)
@@ -123,7 +122,7 @@ function loadTaxonIdTaxonomy(file)
         for line in eachline(fp)
             try
                 taxon_id, tx = split(chomp(line), '\t')
-                taxon_id = int(taxon_id)
+                taxon_id = parse(Int, taxon_id)
                 tx = split(tx, ";")
                 info[taxon_id] = tx
             catch
@@ -154,16 +153,16 @@ end
 function processContigs(file, silva, pr2, viruses, custom, aliases)
     fp = open(file)
     println("Processing Contigs...")
-    tax = Dict{Int, Array{String}}()
-    sps = Dict{Int, String}()
+    tax = Dict{Int, Array{ASCIIString}}()
+    sps = Dict{Int, ASCIIString}()
     for line in eachline(fp)
         tid, tx = split(chomp(line), '\t')
         sp = last(split(tx, ";"))
         if tid == "taxon_id"
             continue
         end
-        tid = int(tid)
-        tax[tid] = String[]
+        tid = parse(Int, tid)
+        tax[tid] = ASCIIString[]
         if ismatch(r"Eukaryota", tx)
             txinfo = pr2
         elseif ismatch(r"Viruses", tx)

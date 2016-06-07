@@ -2,19 +2,19 @@
 
 type Taxon
     taxon_id::Int
-    name::String
+    name::ASCIIString
     parent_id::Int
-    rank::String
+    rank::ASCIIString
 end
 
 function loadNCBI(filename)
     println(STDERR, "Loading ncbi taxonomy...")
-    ncbi = Dict{String, Taxon}()
+    ncbi = Dict{ASCIIString, Taxon}()
     fp = open(filename)
     for line in eachline(fp)
         tid, nm, parent, rk = split(chomp(line), '\t')
-        tid = int(tid)
-        parent = int(parent)
+        tid = parse(Int, tid)
+        parent = parse(Int, parent)
         ncbi[nm] = Taxon(tid, nm, parent, rk)
     end
     close(fp)
@@ -23,11 +23,11 @@ end
 
 function loadExisting(filename)
     println(STDERR, "Loading existing taxonomy...")
-    existing = Dict{String, Int}()
+    existing = Dict{ASCIIString, Int}()
     fp = open(filename)
     for line in eachline(fp)
         tid, nm, parent, rk = split(chomp(line), '\t')
-        tid = int(tid)
+        tid = parse(Int, tid)
         existing[nm] = tid
     end
     close(fp)
@@ -38,8 +38,8 @@ function findMinNum(existing, taxstrings)
     minNum = 1000000000000
     fp = open(taxstrings)
     for line in eachline(fp)
-        num, rest = split(chomp(line), '\t', 2)
-        num = int(num)
+        num, rest = split(chomp(line), '\t', limit = 2)
+        num = parse(Int, num)
         if num < minNum
             minNum = num
         end
@@ -85,14 +85,14 @@ end
 
 function buildHierarchy(filename, ncbi, existing, minNum)
     hierarchy = Dict{Int, Taxon}()
-    nameLookup = Dict{String, Int}()
+    nameLookup = Dict{ASCIIString, Int}()
     hierarchy[1] = Taxon(1, "root", 0, "")
     ranks = ["kingdom","phylum","class","order","family",
              "genus", "species", "subspecies"]
     fp = open(filename)
     for line in eachline(fp)
         tid, tx = split(chomp(line), '\t')
-        tid = int(tid)
+        tid = parse(Int, tid)
         tax = split(tx,';')
         parent = hierarchy[1]
         tlen = length(tax)

@@ -4,14 +4,12 @@ using ArgParse
 
 function parse_commandline()
     s = ArgParseSettings()
-    
     @add_arg_table s begin
         "fasta"
         help = "input fasta file to split"
         required = true
-        arg_type = String
+        arg_type = ASCIIString
     end
-    
     return parse_args(s)
 end
 
@@ -43,7 +41,7 @@ function main()
     rest = open("phylodb_rest_" * ver, "w")
     fastaReader = Task(()->getFasta(fp))
     for seq in fastaReader
-        header = first(split(seq, '\n', 2))
+        header = first(split(seq, '\n', limit = 2))
         flags = last(split(header, ' '))
         if ismatch(r"kegg", flags)
             print(kegg, seq)
